@@ -6,7 +6,9 @@ from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Set, cast
 from backend.models import PacketState
 
 RoutingContext = Mapping[str, Any]
-RoutingStrategy = Callable[[PacketState, str, Iterable[str], RoutingContext], Optional[str]]
+RoutingStrategy = Callable[
+    [PacketState, str, Iterable[str], RoutingContext], Optional[str]
+]
 
 
 def _ordered_neighbors(neighbors: Iterable[str]) -> list[str]:
@@ -23,7 +25,9 @@ def _adjacency_from_context(context: RoutingContext) -> Dict[str, Set[str]]:
     return adjacency
 
 
-def _bfs_next_hop(current_id: str, destination: str, adjacency: Dict[str, Set[str]]) -> Optional[str]:
+def _bfs_next_hop(
+    current_id: str, destination: str, adjacency: Dict[str, Set[str]]
+) -> Optional[str]:
     if current_id == destination:
         return None
     if current_id not in adjacency:
@@ -51,7 +55,10 @@ def _bfs_next_hop(current_id: str, destination: str, adjacency: Dict[str, Set[st
 
 
 def shortest_path_strategy(
-    packet: PacketState, current_id: str, neighbors: Iterable[str], context: RoutingContext
+    packet: PacketState,
+    current_id: str,
+    neighbors: Iterable[str],
+    context: RoutingContext,
 ) -> Optional[str]:
     ordered = _ordered_neighbors(neighbors)
     if not ordered:
@@ -70,7 +77,10 @@ def shortest_path_strategy(
 
 
 def epidemic_strategy(
-    packet: PacketState, current_id: str, neighbors: Iterable[str], context: RoutingContext
+    packet: PacketState,
+    current_id: str,
+    neighbors: Iterable[str],
+    context: RoutingContext,
 ) -> Optional[str]:
     ordered = _ordered_neighbors(neighbors)
     if not ordered:
@@ -83,7 +93,10 @@ def epidemic_strategy(
 
 
 def store_and_forward_strategy(
-    packet: PacketState, current_id: str, neighbors: Iterable[str], context: RoutingContext
+    packet: PacketState,
+    current_id: str,
+    neighbors: Iterable[str],
+    context: RoutingContext,
 ) -> Optional[str]:
     ordered = _ordered_neighbors(neighbors)
     if not ordered:
@@ -102,7 +115,10 @@ def store_and_forward_strategy(
 
 
 def contact_graph_strategy(
-    packet: PacketState, current_id: str, neighbors: Iterable[str], context: RoutingContext
+    packet: PacketState,
+    current_id: str,
+    neighbors: Iterable[str],
+    context: RoutingContext,
 ) -> Optional[str]:
     ordered = _ordered_neighbors(neighbors)
     if not ordered:

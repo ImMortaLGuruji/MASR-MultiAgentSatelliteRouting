@@ -4,7 +4,7 @@ from backend.config import Config
 from backend.engine import SimulationEngine
 
 
-class Phase6PriorityCongestionTests(unittest.TestCase):
+class PriorityCongestionTests(unittest.TestCase):
     def test_spawn_preempts_lowest_priority_when_full(self) -> None:
         engine = SimulationEngine(
             Config(seed=21, num_orbits=1, satellites_per_orbit=2, buffer_capacity=2)

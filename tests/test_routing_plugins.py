@@ -5,7 +5,7 @@ from backend.models import PacketState
 from backend.routing import ROUTING_STRATEGIES, RoutingPolicy, compute_next_hop
 
 
-class Phase5RoutingPluginTests(unittest.TestCase):
+class RoutingPluginTests(unittest.TestCase):
     def setUp(self) -> None:
         self.packet = PacketState(
             packet_id="pkt-route",

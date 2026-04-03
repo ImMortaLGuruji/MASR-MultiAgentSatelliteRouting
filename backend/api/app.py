@@ -3,6 +3,7 @@ import threading
 from dataclasses import asdict, replace
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 
 from backend.api.schemas import (
     ChaosRequest,
@@ -15,6 +16,15 @@ from backend.engine import SimulationEngine, SimulationRunner
 
 
 app = FastAPI(title="MASR", version="0.1.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 engine = SimulationEngine(Config())
 engine_lock = threading.RLock()
 runner = SimulationRunner(

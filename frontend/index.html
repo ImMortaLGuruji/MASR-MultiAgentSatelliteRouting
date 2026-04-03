@@ -4,86 +4,12 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>MASR Snapshot Viewer</title>
-    <link rel="stylesheet" href="./styles.css" />
+    <title>MASR Satellite Visualizer</title>
 </head>
 
 <body>
-    <main class="layout">
-        <section class="panel">
-            <h1>MASR Snapshot Viewer</h1>
-            <div class="controls">
-                <label>
-                    API Base URL
-                    <input id="apiUrl" value="http://localhost:8000" />
-                </label>
-                <label>
-                    WebSocket URL
-                    <input id="wsUrl" value="ws://localhost:8000/ws" />
-                </label>
-                <div class="buttons">
-                    <button id="connectBtn">Connect</button>
-                    <button id="tickBtn" disabled>Tick</button>
-                    <button id="resetBtn" disabled>Reset</button>
-                    <button id="runnerStartBtn" disabled>Runner Start</button>
-                    <button id="runnerStopBtn" disabled>Runner Stop</button>
-                    <button id="streamOffBtn" disabled>Stream Off</button>
-                    <button id="streamOnBtn" disabled>Stream On</button>
-                </div>
-            </div>
-        </section>
-
-        <section class="panel">
-            <h2>Controls</h2>
-            <div class="controls">
-                <div class="inline-grid">
-                    <label>
-                        Routing Policy
-                        <select id="routingPolicy">
-                            <option value="SHORTEST_PATH">SHORTEST_PATH</option>
-                            <option value="EPIDEMIC">EPIDEMIC</option>
-                            <option value="STORE_AND_FORWARD">STORE_AND_FORWARD</option>
-                            <option value="CONTACT_GRAPH_ROUTING">CONTACT_GRAPH_ROUTING</option>
-                        </select>
-                    </label>
-                    <button id="applyRoutingBtn">Apply Routing</button>
-                </div>
-
-                <div class="inline-grid">
-                    <label>
-                        Runner Tick Interval (s)
-                        <input id="tickInterval" type="number" min="0.1" step="0.1" value="1.0" />
-                    </label>
-                    <label class="checkbox-label">
-                        <input id="dropOnReject" type="checkbox" />
-                        Drop on Reject
-                    </label>
-                    <button id="applyConfigBtn">Apply Config</button>
-                </div>
-
-                <div class="buttons">
-                    <button id="chaosFailBtn">Fail 1 Satellite</button>
-                    <button id="chaosRestoreBtn">Restore 1 Satellite</button>
-                    <button id="chaosPartitionOnBtn">Partition On</button>
-                    <button id="chaosPartitionOffBtn">Partition Off</button>
-                    <button id="chaosBandwidthBtn">Bandwidth Fluctuation</button>
-                </div>
-            </div>
-            <p id="statusLine">Ready.</p>
-        </section>
-
-        <section class="panel">
-            <h2>State</h2>
-            <div id="summary"></div>
-        </section>
-
-        <section class="panel">
-            <h2>Raw Snapshot</h2>
-            <pre id="snapshot">No snapshot yet.</pre>
-        </section>
-    </main>
-
-    <script src="./websocket/client.js" type="module"></script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
 </body>
 
 </html>

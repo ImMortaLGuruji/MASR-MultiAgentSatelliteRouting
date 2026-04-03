@@ -4,7 +4,7 @@ from backend.config import Config
 from backend.engine import SimulationEngine
 
 
-class Phase4ChaosAndMetricsTests(unittest.TestCase):
+class ChaosAndMetricsTests(unittest.TestCase):
     def test_random_satellite_failure_is_deterministic(self) -> None:
         config = Config(
             seed=99, num_orbits=2, satellites_per_orbit=3, max_link_distance=20000.0
@@ -40,7 +40,7 @@ class Phase4ChaosAndMetricsTests(unittest.TestCase):
         for source, target in engine.active_links.keys():
             self.assertEqual(source in left, target in left)
 
-    def test_phase4_metrics_fields_present(self) -> None:
+    def test_metrics_fields_present(self) -> None:
         engine = SimulationEngine(
             Config(
                 seed=15, num_orbits=1, satellites_per_orbit=3, max_link_distance=20000.0

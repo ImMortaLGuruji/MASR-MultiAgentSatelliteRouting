@@ -16,7 +16,7 @@ class Config:
     routing_policy: str = "SHORTEST_PATH"
     packet_ttl: int = 100
     drop_on_reject: bool = False
-    
+
     # Energy config
     battery_capacity: float = 100.0
     battery_discharge_rate: float = 2.0

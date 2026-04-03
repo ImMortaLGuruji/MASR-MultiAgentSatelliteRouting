@@ -7,7 +7,9 @@ from backend.engine.simulation_engine import SimulationEngine
 
 
 class SimulationRunner:
-    def __init__(self, engine: SimulationEngine, tick_interval: float, lock: threading.RLock) -> None:
+    def __init__(
+        self, engine: SimulationEngine, tick_interval: float, lock: threading.RLock
+    ) -> None:
         self.engine = engine
         self.tick_interval = tick_interval
         self.lock = lock
@@ -22,7 +24,9 @@ class SimulationRunner:
         if self.is_running:
             return False
         self._stop_event.clear()
-        self._thread = threading.Thread(target=self._loop, name="masr-sim-runner", daemon=True)
+        self._thread = threading.Thread(
+            target=self._loop, name="masr-sim-runner", daemon=True
+        )
         self._thread.start()
         return True
 

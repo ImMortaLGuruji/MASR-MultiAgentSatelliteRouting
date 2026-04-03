@@ -92,10 +92,16 @@ class SimulationEngine:
         holder_sat = self.satellites.get(holder_id)
         if holder_sat is not None:
             holder_sat.state.packet_queue = [
-                existing for existing in holder_sat.state.packet_queue if existing != packet_id
+                existing
+                for existing in holder_sat.state.packet_queue
+                if existing != packet_id
             ]
         packet = self.packets.get(packet_id)
-        if packet is not None and packet.state not in {"DELIVERED", "DROPPED", "EXPIRED"}:
+        if packet is not None and packet.state not in {
+            "DELIVERED",
+            "DROPPED",
+            "EXPIRED",
+        }:
             packet.state = "DROPPED"
             self.metrics.record_drop()
 
@@ -111,7 +117,9 @@ class SimulationEngine:
 
         return sorted(packet_ids, key=rank)[0]
 
-    def _enqueue_with_priority_preemption(self, satellite_id: str, incoming_packet_id: str) -> bool:
+    def _enqueue_with_priority_preemption(
+        self, satellite_id: str, incoming_packet_id: str
+    ) -> bool:
         target_sat = self.satellites.get(satellite_id)
         incoming_packet = self.packets.get(incoming_packet_id)
         if target_sat is None or incoming_packet is None:
@@ -292,25 +300,26 @@ class SimulationEngine:
                 altitude_km=self.config.orbital_altitude,
                 tick=self.tick,
             )
-            
+
             # Energy/Eclipse model update
             satellite.state.in_eclipse = check_eclipse(satellite.state.position)
-            
+
             if satellite.state.in_eclipse:
                 satellite.state.current_battery -= self.config.battery_discharge_rate
             else:
                 satellite.state.current_battery += self.config.battery_charge_rate
-            
-            satellite.state.current_battery = max(0.0, min(self.config.battery_capacity, satellite.state.current_battery))
-            
+
+            satellite.state.current_battery = max(
+                0.0, min(self.config.battery_capacity, satellite.state.current_battery)
+            )
+
             # If battery drops to 0, it shuts down. We handle temporary shutdown logically:
             # We enforce failure state if it's dead, but if it recharges we can revive it.
             # However MASR chaos engineering failures are permanent manual triggers typically.
-            # Let's cleanly separate it or use `failed_satellites`. 
-            # If we don't put it in failed_satellites, we can just block it from links 
-            # in compute_link_visibility. Wait, let's keep it simple: 
+            # Let's cleanly separate it or use `failed_satellites`.
+            # If we don't put it in failed_satellites, we can just block it from links
+            # in compute_link_visibility. Wait, let's keep it simple:
             # satellite with battery == 0.0 shouldn't form links.
-
 
     def compute_link_visibility(self) -> None:
         new_links: Dict[Tuple[str, str], LinkState] = {}
