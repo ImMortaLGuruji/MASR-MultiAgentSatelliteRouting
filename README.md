@@ -15,7 +15,7 @@ Unlike traditional network simulators, MASR enforces:
 
 MASR is designed as a **research-grade coordination framework** rather than a simple visualization or toy simulation.
 
-## Current Implementation Status (Phase 5)
+## Current Implementation Status (Phase 8)
 
 Implemented now:
 
@@ -30,12 +30,25 @@ Implemented now:
 * phase 4 deterministic chaos extensions (satellite failure + network partition + bandwidth fluctuation)
 * phase 4 metrics (`throughput`, `link_utilization`, `satellite_buffer_usage`, `packet_drop_rate`)
 * phase 5 routing strategy plugin layer (registry-based policies with graph-aware shortest-path/contact-graph handlers)
+* phase 6 deterministic priority-based congestion handling (drop-lowest-priority and preemption)
+* phase 7 API/frontend control parity for routing, chaos, runner, and runtime config
+* phase 8 packaging/ops hardening (`pyproject.toml`, `Makefile`, CI workflow, operations guide)
+* polish pass: API contract tests for `/config`, `/state`, `/runner/*`, and failed-source spawn handling
 
 Quick start:
 
 ```bash
 pip install -r requirements.txt
 python -m backend.main
+```
+
+Using Makefile shortcuts:
+
+```bash
+make setup
+make run
+make test
+make frontend
 ```
 
 Run tests:
@@ -63,6 +76,23 @@ Phase 3 API controls:
 POST /runner/start
 POST /runner/stop
 GET  /runner/status
+```
+
+Phase 7 runtime config API:
+
+```text
+GET  /config
+POST /config
+```
+
+`POST /config` example:
+
+```json
+{
+  "routing_policy": "CONTACT_GRAPH_ROUTING",
+  "drop_on_reject": true,
+  "tick_interval": 0.5
+}
 ```
 
 Phase 4 chaos modes for `POST /chaos`:

@@ -31,9 +31,14 @@ input {
     padding: 8px;
 }
 
+select {
+    padding: 8px;
+}
+
 .buttons {
     display: flex;
     gap: 8px;
+    flex-wrap: wrap;
 }
 
 button {
@@ -47,4 +52,17 @@ pre {
     overflow: auto;
     white-space: pre-wrap;
     word-break: break-word;
+}
+
+.inline-grid {
+    display: grid;
+    gap: 8px;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    align-items: end;
+}
+
+.checkbox-label {
+    display: flex;
+    gap: 8px;
+    align-items: center;
 }

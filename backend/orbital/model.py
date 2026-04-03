@@ -23,3 +23,11 @@ def compute_position(
 
 def distance(a: Vector3, b: Vector3) -> float:
     return math.sqrt(((a.x - b.x) ** 2) + ((a.y - b.y) ** 2) + ((a.z - b.z) ** 2))
+
+def check_eclipse(position: Vector3) -> bool:
+    """True if in the Earth's cylindrical shadow from the +x direction."""
+    if position.x < 0:
+        dist_from_x_axis_sq = position.y ** 2 + position.z ** 2
+        if dist_from_x_axis_sq < (EARTH_RADIUS_KM ** 2):
+            return True
+    return False

@@ -1,9 +1,15 @@
 import asyncio
 import threading
+from dataclasses import asdict, replace
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 
-from backend.api.schemas import ChaosRequest, SetRoutingRequest, SpawnPacketRequest
+from backend.api.schemas import (
+    ChaosRequest,
+    ConfigUpdateRequest,
+    SetRoutingRequest,
+    SpawnPacketRequest,
+)
 from backend.config import Config
 from backend.engine import SimulationEngine, SimulationRunner
 
@@ -16,6 +22,22 @@ runner = SimulationRunner(
 )
 
 
+def _runtime_config() -> dict:
+    config = asdict(engine.config)
+    config["runner_tick_interval"] = runner.tick_interval
+    return config
+
+
+def _state_payload() -> dict:
+    snapshot = engine.snapshot()
+    snapshot["runner"] = {
+        "running": runner.is_running,
+        "tick_interval": runner.tick_interval,
+    }
+    snapshot["config"] = _runtime_config()
+    return snapshot
+
+
 @app.get("/")
 def root() -> dict:
     return {"service": "MASR", "status": "ok"}
@@ -24,7 +46,36 @@ def root() -> dict:
 @app.get("/state")
 def get_state() -> dict:
     with engine_lock:
-        return engine.snapshot()
+        return _state_payload()
+
+
+@app.get("/config")
+def get_config() -> dict:
+    with engine_lock:
+        return _runtime_config()
+
+
+@app.post("/config")
+def update_config(request: ConfigUpdateRequest) -> dict:
+    with engine_lock:
+        updated = engine.config
+
+        if request.routing_policy is not None:
+            updated = replace(updated, routing_policy=request.routing_policy)
+            for satellite_id in sorted(engine.satellites.keys()):
+                engine.satellites[satellite_id].state.routing_policy = (
+                    request.routing_policy
+                )
+
+        if request.drop_on_reject is not None:
+            updated = replace(updated, drop_on_reject=request.drop_on_reject)
+
+        if request.tick_interval is not None:
+            updated = replace(updated, tick_interval=request.tick_interval)
+            runner.tick_interval = request.tick_interval
+
+        engine.config = updated
+        return _runtime_config()
 
 
 @app.get("/metrics")
@@ -70,6 +121,7 @@ def reset() -> dict:
 @app.post("/set_routing")
 def set_routing(request: SetRoutingRequest) -> dict:
     with engine_lock:
+        engine.config = replace(engine.config, routing_policy=request.policy)
         for satellite_id in sorted(engine.satellites.keys()):
             engine.satellites[satellite_id].state.routing_policy = request.policy
     return {"status": "ok", "policy": request.policy}
@@ -169,7 +221,7 @@ async def stream_state(websocket: WebSocket) -> None:
     stream_interval = max(engine.config.tick_interval, 0.1)
     try:
         with engine_lock:
-            initial_snapshot = engine.snapshot()
+            initial_snapshot = _state_payload()
         await websocket.send_json(initial_snapshot)
         while True:
             if auto_stream:
@@ -216,11 +268,7 @@ async def stream_state(websocket: WebSocket) -> None:
                     auto_stream = True
 
             with engine_lock:
-                snapshot = engine.snapshot()
-            snapshot["runner"] = {
-                "running": runner.is_running,
-                "tick_interval": runner.tick_interval,
-            }
+                snapshot = _state_payload()
             await websocket.send_json(snapshot)
     except WebSocketDisconnect:
         return

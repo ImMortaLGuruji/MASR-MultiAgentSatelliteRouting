@@ -9,7 +9,7 @@ from backend.config import Config
 from backend.messaging import MessageBus
 from backend.metrics import MetricsCollector
 from backend.models import LinkState, Message, PacketState, SatelliteState, Transfer
-from backend.orbital import compute_position, distance
+from backend.orbital import check_eclipse, compute_position, distance
 
 
 class SimulationEngine:
@@ -65,6 +65,10 @@ class SimulationEngine:
                 self.satellites[satellite_id] = agent
                 self.agents[satellite_id] = agent
 
+            station = GroundStationAgent("gs-0")
+            self.ground_stations[station.id] = station
+            self.agents[station.id] = station
+
     def get_routing_context(self, current_id: str) -> dict:
         adjacency: Dict[str, Set[str]] = {}
         for satellite_id in sorted(self.satellites.keys()):
@@ -84,9 +88,62 @@ class SimulationEngine:
             "current_id": current_id,
         }
 
-        station = GroundStationAgent("gs-0")
-        self.ground_stations[station.id] = station
-        self.agents[station.id] = station
+    def _drop_packet_from_holder(self, packet_id: str, holder_id: str) -> None:
+        holder_sat = self.satellites.get(holder_id)
+        if holder_sat is not None:
+            holder_sat.state.packet_queue = [
+                existing for existing in holder_sat.state.packet_queue if existing != packet_id
+            ]
+        packet = self.packets.get(packet_id)
+        if packet is not None and packet.state not in {"DELIVERED", "DROPPED", "EXPIRED"}:
+            packet.state = "DROPPED"
+            self.metrics.record_drop()
+
+    def _lowest_priority_packet_id(self, packet_ids: List[str]) -> str | None:
+        if not packet_ids:
+            return None
+
+        def rank(packet_id: str) -> tuple[int, str]:
+            packet = self.packets.get(packet_id)
+            if packet is None:
+                return (-1, packet_id)
+            return (packet.priority, packet_id)
+
+        return sorted(packet_ids, key=rank)[0]
+
+    def _enqueue_with_priority_preemption(self, satellite_id: str, incoming_packet_id: str) -> bool:
+        target_sat = self.satellites.get(satellite_id)
+        incoming_packet = self.packets.get(incoming_packet_id)
+        if target_sat is None or incoming_packet is None:
+            return False
+
+        queue = list(target_sat.state.packet_queue)
+        capacity = target_sat.state.buffer_capacity
+        if len(queue) < capacity:
+            queue.append(incoming_packet_id)
+            target_sat.state.packet_queue = sorted(set(queue))
+            incoming_packet.state = "IN_QUEUE"
+            return True
+
+        evicted_packet_id = self._lowest_priority_packet_id(queue)
+        if evicted_packet_id is None:
+            return False
+        evicted_packet = self.packets.get(evicted_packet_id)
+        if evicted_packet is None:
+            return False
+
+        if incoming_packet.priority > evicted_packet.priority:
+            target_sat.state.packet_queue = [
+                existing for existing in queue if existing != evicted_packet_id
+            ]
+            self._drop_packet_from_holder(evicted_packet_id, satellite_id)
+
+            target_sat.state.packet_queue.append(incoming_packet_id)
+            target_sat.state.packet_queue = sorted(set(target_sat.state.packet_queue))
+            incoming_packet.state = "IN_QUEUE"
+            return True
+
+        return False
 
     def next_message_id(self) -> str:
         self._message_counter += 1
@@ -137,11 +194,10 @@ class SimulationEngine:
 
         source_agent = self.satellites.get(source)
         if source_agent is not None:
-            source_agent.state.packet_queue.append(packet_id)
-            source_agent.state.packet_queue = sorted(
-                set(source_agent.state.packet_queue)
-            )
-            packet.state = "IN_QUEUE"
+            admitted = self._enqueue_with_priority_preemption(source, packet_id)
+            if not admitted:
+                packet.state = "DROPPED"
+                self.metrics.record_drop()
         return packet
 
     def reset(self) -> None:
@@ -236,6 +292,25 @@ class SimulationEngine:
                 altitude_km=self.config.orbital_altitude,
                 tick=self.tick,
             )
+            
+            # Energy/Eclipse model update
+            satellite.state.in_eclipse = check_eclipse(satellite.state.position)
+            
+            if satellite.state.in_eclipse:
+                satellite.state.current_battery -= self.config.battery_discharge_rate
+            else:
+                satellite.state.current_battery += self.config.battery_charge_rate
+            
+            satellite.state.current_battery = max(0.0, min(self.config.battery_capacity, satellite.state.current_battery))
+            
+            # If battery drops to 0, it shuts down. We handle temporary shutdown logically:
+            # We enforce failure state if it's dead, but if it recharges we can revive it.
+            # However MASR chaos engineering failures are permanent manual triggers typically.
+            # Let's cleanly separate it or use `failed_satellites`. 
+            # If we don't put it in failed_satellites, we can just block it from links 
+            # in compute_link_visibility. Wait, let's keep it simple: 
+            # satellite with battery == 0.0 shouldn't form links.
+
 
     def compute_link_visibility(self) -> None:
         new_links: Dict[Tuple[str, str], LinkState] = {}
@@ -249,8 +324,13 @@ class SimulationEngine:
             if source_id in self.failed_satellites:
                 continue
             source = self.satellites[source_id]
+            if source.state.current_battery <= 0.0:
+                continue
             for target_id in ids[i + 1 :]:
                 if target_id in self.failed_satellites:
+                    continue
+                target = self.satellites[target_id]
+                if target.state.current_battery <= 0.0:
                     continue
                 if self.network_partition_enabled:
                     source_left = source_id in partition_left
@@ -366,38 +446,30 @@ class SimulationEngine:
             target_sat = self.satellites.get(transfer.target)
             if target_sat is not None:
                 if transfer.target in self.failed_satellites:
-                    packet.state = "DROPPED"
-                    self.metrics.record_drop()
                     source_agent.state.packet_queue = [
                         existing
                         for existing in source_agent.state.packet_queue
                         if existing != transfer.packet_id
                     ]
-                    continue
-                if (
-                    len(target_sat.state.packet_queue)
-                    >= target_sat.state.buffer_capacity
-                ):
                     packet.state = "DROPPED"
                     self.metrics.record_drop()
-                    source_agent.state.packet_queue = [
-                        existing
-                        for existing in source_agent.state.packet_queue
-                        if existing != transfer.packet_id
-                    ]
                     continue
                 source_agent.state.packet_queue = [
                     existing
                     for existing in source_agent.state.packet_queue
                     if existing != transfer.packet_id
                 ]
-                target_sat.state.packet_queue.append(transfer.packet_id)
-                target_sat.state.packet_queue = sorted(
-                    set(target_sat.state.packet_queue)
+
+                admitted = self._enqueue_with_priority_preemption(
+                    transfer.target, transfer.packet_id
                 )
+                if not admitted:
+                    packet.state = "DROPPED"
+                    self.metrics.record_drop()
+                    continue
+
                 packet.current_holder = transfer.target
                 packet.route_history.append(transfer.target)
-                packet.state = "IN_QUEUE"
                 if transfer.target == packet.destination:
                     packet.state = "DELIVERED"
                     target_sat.state.packet_queue = [
@@ -471,6 +543,9 @@ class SimulationEngine:
                 "bandwidth_capacity": state.bandwidth_capacity,
                 "packet_queue": sorted(state.packet_queue),
                 "routing_policy": state.routing_policy,
+                "battery_capacity": state.battery_capacity,
+                "current_battery": state.current_battery,
+                "in_eclipse": state.in_eclipse,
             }
 
         links = []

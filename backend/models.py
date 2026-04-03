@@ -35,6 +35,11 @@ class SatelliteState:
     packet_queue: List[PacketID] = field(default_factory=list)
     link_table: Dict[str, LinkState] = field(default_factory=dict)
     routing_policy: str = "SHORTEST_PATH"
+    
+    # Energy model
+    battery_capacity: float = 100.0
+    current_battery: float = 100.0
+    in_eclipse: bool = False
 
 
 @dataclass
