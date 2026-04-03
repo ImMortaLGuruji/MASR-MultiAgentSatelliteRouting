@@ -12,12 +12,14 @@ class SatelliteAgent(BaseAgent):
         packet_lookup: Dict[str, PacketState],
         transfer_scheduler: Callable[[str, str, str], None],
         message_factory: Callable[[str, str, str, dict], Message],
+        reject_handler: Callable[[str, str, str], bool],
     ) -> None:
         super().__init__(state.satellite_id)
         self.state = state
         self.packet_lookup = packet_lookup
         self.transfer_scheduler = transfer_scheduler
         self.message_factory = message_factory
+        self.reject_handler = reject_handler
         self.pending_outgoing: Dict[str, str] = {}
 
     def set_neighbors(self, neighbors: List[str]) -> None:
@@ -68,6 +70,7 @@ class SatelliteAgent(BaseAgent):
         if message.type == "PACKET_REJECT":
             packet_id = str(message.payload["packet_id"])
             self.pending_outgoing.pop(packet_id, None)
+            self.reject_handler(packet_id, self.id, message.sender)
 
     def process_tick(self, tick: int, sender: Callable[[Message], None]) -> None:
         self.process_messages(sender, tick)

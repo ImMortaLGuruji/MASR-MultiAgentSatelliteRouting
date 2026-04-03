@@ -15,6 +15,7 @@ class Config:
     seed: int = 42
     routing_policy: str = "SHORTEST_PATH"
     packet_ttl: int = 100
+    drop_on_reject: bool = False
 
     @property
     def total_satellites(self) -> int:

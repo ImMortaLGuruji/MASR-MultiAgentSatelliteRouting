@@ -15,6 +15,65 @@ Unlike traditional network simulators, MASR enforces:
 
 MASR is designed as a **research-grade coordination framework** rather than a simple visualization or toy simulation.
 
+## Current Implementation Status (Phase 3)
+
+Implemented now:
+
+* deterministic backend core (`backend/`)
+* deterministic message bus and isolated agents
+* simulation engine tick loop + metrics + snapshots
+* FastAPI endpoints (`/state`, `/metrics`, `/spawn_packet`, `/tick`, `/reset`, `/set_routing`, `/chaos`) and websocket (`/ws`)
+* deterministic tests in `tests/`
+* minimal frontend websocket snapshot viewer in `frontend/`
+* phase 3 deterministic background runner + websocket auto-stream controls
+* configurable strict congestion policy via `Config.drop_on_reject`
+
+Quick start:
+
+```bash
+pip install -r requirements.txt
+python -m backend.main
+```
+
+Run tests:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+Open frontend viewer:
+
+```bash
+cd frontend
+python -m http.server 5500
+```
+
+Then open:
+
+```text
+http://localhost:5500
+```
+
+Phase 3 API controls:
+
+```text
+POST /runner/start
+POST /runner/stop
+GET  /runner/status
+```
+
+Phase 3 websocket commands:
+
+```text
+tick
+reset
+runner:start
+runner:stop
+stream:off
+stream:on
+stream:interval:<seconds>
+```
+
 ---
 
 # 1 Core Design Goals

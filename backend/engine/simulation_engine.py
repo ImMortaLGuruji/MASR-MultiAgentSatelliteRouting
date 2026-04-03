@@ -53,7 +53,11 @@ class SimulationEngine:
                     routing_policy=self.config.routing_policy,
                 )
                 agent = SatelliteAgent(
-                    state, self.packets, self.schedule_transfer, self.create_message
+                    state,
+                    self.packets,
+                    self.schedule_transfer,
+                    self.create_message,
+                    self.handle_packet_reject,
                 )
                 self.satellites[satellite_id] = agent
                 self.agents[satellite_id] = agent
@@ -227,6 +231,29 @@ class SimulationEngine:
         self.scheduled_transfers.append(
             Transfer(packet_id=packet_id, source=source, target=target)
         )
+
+    def handle_packet_reject(
+        self, packet_id: str, source: str, rejected_by: str
+    ) -> bool:
+        if not self.config.drop_on_reject:
+            return False
+        packet = self.packets.get(packet_id)
+        source_agent = self.satellites.get(source)
+        if packet is None or source_agent is None:
+            return False
+        if packet.current_holder != source:
+            return False
+        if packet_id not in source_agent.state.packet_queue:
+            return False
+
+        source_agent.state.packet_queue = [
+            existing
+            for existing in source_agent.state.packet_queue
+            if existing != packet_id
+        ]
+        packet.state = "DROPPED"
+        self.metrics.record_drop()
+        return True
 
     def process_transfers(self) -> None:
         for transfer in sorted(

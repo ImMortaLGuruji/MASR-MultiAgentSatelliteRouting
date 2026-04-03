@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MASR Snapshot Viewer</title>
+    <link rel="stylesheet" href="./styles.css" />
+</head>
+
+<body>
+    <main class="layout">
+        <section class="panel">
+            <h1>MASR Snapshot Viewer</h1>
+            <div class="controls">
+                <label>
+                    WebSocket URL
+                    <input id="wsUrl" value="ws://localhost:8000/ws" />
+                </label>
+                <div class="buttons">
+                    <button id="connectBtn">Connect</button>
+                    <button id="tickBtn" disabled>Tick</button>
+                    <button id="resetBtn" disabled>Reset</button>
+                    <button id="runnerStartBtn" disabled>Runner Start</button>
+                    <button id="runnerStopBtn" disabled>Runner Stop</button>
+                    <button id="streamOffBtn" disabled>Stream Off</button>
+                    <button id="streamOnBtn" disabled>Stream On</button>
+                </div>
+            </div>
+        </section>
+
+        <section class="panel">
+            <h2>State</h2>
+            <div id="summary"></div>
+        </section>
+
+        <section class="panel">
+            <h2>Raw Snapshot</h2>
+            <pre id="snapshot">No snapshot yet.</pre>
+        </section>
+    </main>
+
+    <script src="./websocket/client.js" type="module"></script>
+</body>
+
+</html>
