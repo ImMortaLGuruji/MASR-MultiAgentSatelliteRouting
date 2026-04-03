@@ -38,5 +38,9 @@ def compute_next_hop(
     if not ordered_neighbors:
         return None
 
-    strategy = ROUTING_STRATEGIES.get(policy, shortest_path_strategy)
+    strategy = ROUTING_STRATEGIES.get(policy)
+    if strategy is None:
+        return ordered_neighbors[0]
+
+    strategy = strategy or shortest_path_strategy
     return strategy(packet, current_id, ordered_neighbors, context or {})

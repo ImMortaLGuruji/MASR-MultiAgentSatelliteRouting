@@ -62,7 +62,7 @@ class RoutingAndCongestionTests(unittest.TestCase):
 
         packet = engine.spawn_packet("sat-00-00", target_id)
 
-        for _ in range(3):
+        for _ in range(5):
             engine.run_tick()
 
         self.assertEqual(engine.packets[packet.packet_id].state, "IN_QUEUE")
@@ -84,7 +84,7 @@ class RoutingAndCongestionTests(unittest.TestCase):
 
         packet = engine.spawn_packet("sat-00-00", target_id)
 
-        for _ in range(3):
+        for _ in range(5):
             engine.run_tick()
 
         self.assertEqual(engine.packets[packet.packet_id].state, "DROPPED")

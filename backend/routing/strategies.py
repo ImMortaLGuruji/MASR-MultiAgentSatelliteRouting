@@ -72,8 +72,9 @@ def shortest_path_strategy(
         next_hop = _bfs_next_hop(current_id, packet.destination, adjacency)
         if next_hop is not None and next_hop in ordered:
             return next_hop
+        return None
 
-    return ordered[0]
+    return None
 
 
 def epidemic_strategy(
@@ -110,8 +111,9 @@ def store_and_forward_strategy(
         next_hop = _bfs_next_hop(current_id, packet.destination, adjacency)
         if next_hop is not None and next_hop in ordered:
             return next_hop
+        return None
 
-    return ordered[0]
+    return None
 
 
 def contact_graph_strategy(
@@ -133,7 +135,8 @@ def contact_graph_strategy(
         next_hop = _bfs_next_hop(current_id, packet.destination, adjacency)
         if next_hop is not None and next_hop in ordered:
             return next_hop
+        return None
 
     if packet.destination in ordered:
         return packet.destination
-    return ordered[0]
+    return None

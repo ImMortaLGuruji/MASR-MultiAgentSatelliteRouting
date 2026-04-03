@@ -1,26 +1,28 @@
 import React, { useEffect, useRef } from 'react';
-import { Controls } from './components/Controls';
-import { Metrics } from './components/Metrics';
+import { Controls } from './ui/Controls';
+import { Metrics } from './ui/Metrics';
 import { connectWebSocket } from './websocket/client';
-import { initRenderer } from './renderer/canvas';
+import { initRenderer } from './renderer/engine';
 
 function App() {
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    const containerRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
         const ws = connectWebSocket('ws://localhost:8000/ws');
 
         const handleResize = () => {
-            if (canvasRef.current) {
-                canvasRef.current.width = window.innerWidth;
-                canvasRef.current.height = window.innerHeight;
+            if (canvasRef.current && containerRef.current) {
+                canvasRef.current.width = containerRef.current.clientWidth;
+                canvasRef.current.height = containerRef.current.clientHeight;
             }
         };
 
         if (canvasRef.current) {
             initRenderer(canvasRef.current);
             window.addEventListener('resize', handleResize);
-            handleResize();
+            // small delay to ensure CSS Grid layout has settled before sizing canvas
+            setTimeout(handleResize, 10);
         }
 
         return () => {
@@ -30,10 +32,18 @@ function App() {
     }, []);
 
     return (
-        <div style={{ width: '100vw', height: '100vh', overflow: 'hidden', background: '#0f172a' }}>
-            <canvas ref={canvasRef} style={{ display: 'block' }} />
-            <Controls />
-            <Metrics />
+        <div className="dashboard-layout">
+            <div className="panel">
+                <Controls />
+            </div>
+
+            <div className="canvas-container" ref={containerRef}>
+                <canvas ref={canvasRef} style={{ display: 'block' }} />
+            </div>
+
+            <div className="panel panel-right">
+                <Metrics />
+            </div>
         </div>
     );
 }

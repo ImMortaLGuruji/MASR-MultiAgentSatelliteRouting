@@ -1,6 +1,7 @@
 import asyncio
 import threading
 from dataclasses import asdict, replace
+from collections import deque
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -46,6 +47,68 @@ def _state_payload() -> dict:
     }
     snapshot["config"] = _runtime_config()
     return snapshot
+
+
+def _build_adjacency_from_links() -> dict[str, set[str]]:
+    adjacency: dict[str, set[str]] = {
+        satellite_id: set() for satellite_id in sorted(engine.satellites.keys())
+    }
+    for source_id, target_id in sorted(engine.active_links.keys()):
+        adjacency[source_id].add(target_id)
+        adjacency[target_id].add(source_id)
+    return adjacency
+
+
+def _reachable_nodes(source: str, adjacency: dict[str, set[str]]) -> list[str]:
+    if source not in adjacency:
+        return []
+    queue: deque[str] = deque([source])
+    seen = {source}
+    while queue:
+        node = queue.popleft()
+        for neighbor in sorted(adjacency.get(node, set())):
+            if neighbor in seen:
+                continue
+            seen.add(neighbor)
+            queue.append(neighbor)
+    return sorted(node for node in seen if node != source)
+
+
+def _diff_payload(previous: dict | None, current: dict) -> dict:
+    if previous is None:
+        full = dict(current)
+        full["diff"] = False
+        return full
+
+    changed_satellites = {
+        satellite_id: state
+        for satellite_id, state in current["satellites"].items()
+        if previous.get("satellites", {}).get(satellite_id) != state
+    }
+    changed_packets = {
+        packet_id: state
+        for packet_id, state in current["packets"].items()
+        if previous.get("packets", {}).get(packet_id) != state
+    }
+    removed_packets = sorted(
+        set(previous.get("packets", {}).keys()) - set(current["packets"].keys())
+    )
+
+    links_changed = previous.get("links") != current.get("links")
+
+    return {
+        "diff": True,
+        "tick": current["tick"],
+        "changed_satellites": changed_satellites,
+        "changed_packets": changed_packets,
+        "removed_packets": removed_packets,
+        "links": current["links"] if links_changed else None,
+        "metrics": current["metrics"],
+        "failed_satellites": current["failed_satellites"],
+        "network_partition_enabled": current["network_partition_enabled"],
+        "runner": current.get("runner", {}),
+        "config": current.get("config", {}),
+    }
 
 
 @app.get("/")
@@ -142,14 +205,18 @@ def chaos(request: ChaosRequest) -> dict:
     with engine_lock:
         ids = sorted(engine.satellites.keys())
         if request.mode == "mass_packet_generation":
+            if not engine.active_links:
+                engine.compute_link_visibility()
             generated = 0
             if len(ids) < 2:
                 return {"status": "ok", "generated": 0}
+            adjacency = _build_adjacency_from_links()
             for index in range(request.count):
                 source = ids[index % len(ids)]
-                destination = ids[-((index % len(ids)) + 1)]
-                if source == destination:
+                reachable = _reachable_nodes(source, adjacency)
+                if not reachable:
                     continue
+                destination = reachable[index % len(reachable)]
                 engine.spawn_packet(
                     source=source,
                     destination=destination,
@@ -229,10 +296,12 @@ async def stream_state(websocket: WebSocket) -> None:
     await websocket.accept()
     auto_stream = True
     stream_interval = max(engine.config.tick_interval, 0.1)
+    previous_snapshot: dict | None = None
     try:
         with engine_lock:
             initial_snapshot = _state_payload()
-        await websocket.send_json(initial_snapshot)
+        await websocket.send_json(_diff_payload(previous_snapshot, initial_snapshot))
+        previous_snapshot = initial_snapshot
         while True:
             if auto_stream:
                 try:
@@ -279,6 +348,7 @@ async def stream_state(websocket: WebSocket) -> None:
 
             with engine_lock:
                 snapshot = _state_payload()
-            await websocket.send_json(snapshot)
+            await websocket.send_json(_diff_payload(previous_snapshot, snapshot))
+            previous_snapshot = snapshot
     except WebSocketDisconnect:
         return

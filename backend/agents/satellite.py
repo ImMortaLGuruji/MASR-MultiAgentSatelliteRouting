@@ -89,16 +89,19 @@ class SatelliteAgent(BaseAgent):
             )
             if next_hop is None or packet_id in self.pending_outgoing:
                 continue
-            offer = self.message_factory(
-                self.id,
-                next_hop,
-                "PACKET_OFFER",
-                {
-                    "packet_id": packet.packet_id,
-                    "priority": packet.priority,
-                    "size": packet.size,
-                    "destination": packet.destination,
-                },
-            )
+            self._send_offer(packet, next_hop, sender)
             self.pending_outgoing[packet_id] = next_hop
-            sender(offer)
+
+    def _send_offer(self, packet, next_hop: str, sender) -> None:
+        offer = self.message_factory(
+            self.id,
+            next_hop,
+            "PACKET_OFFER",
+            {
+                "packet_id": packet.packet_id,
+                "priority": packet.priority,
+                "size": packet.size,
+                "destination": packet.destination,
+            },
+        )
+        sender(offer)

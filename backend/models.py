@@ -71,3 +71,4 @@ class Transfer:
     packet_id: str
     source: str
     target: str
+    ready_tick: int
