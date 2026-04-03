@@ -60,9 +60,29 @@ class SimulationEngine:
                     self.schedule_transfer,
                     self.create_message,
                     self.handle_packet_reject,
+                    self.get_routing_context,
                 )
                 self.satellites[satellite_id] = agent
                 self.agents[satellite_id] = agent
+
+    def get_routing_context(self, current_id: str) -> dict:
+        adjacency: Dict[str, Set[str]] = {}
+        for satellite_id in sorted(self.satellites.keys()):
+            adjacency[satellite_id] = set()
+        for source_id, target_id in sorted(self.active_links.keys()):
+            adjacency[source_id].add(target_id)
+            adjacency[target_id].add(source_id)
+
+        predicted_adjacency = {node: set(links) for node, links in adjacency.items()}
+
+        return {
+            "tick": self.tick,
+            "adjacency": adjacency,
+            "predicted_adjacency": predicted_adjacency,
+            "failed_satellites": set(self.failed_satellites),
+            "network_partition_enabled": self.network_partition_enabled,
+            "current_id": current_id,
+        }
 
         station = GroundStationAgent("gs-0")
         self.ground_stations[station.id] = station

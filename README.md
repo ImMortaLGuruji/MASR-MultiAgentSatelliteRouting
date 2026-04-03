@@ -15,7 +15,7 @@ Unlike traditional network simulators, MASR enforces:
 
 MASR is designed as a **research-grade coordination framework** rather than a simple visualization or toy simulation.
 
-## Current Implementation Status (Phase 4)
+## Current Implementation Status (Phase 5)
 
 Implemented now:
 
@@ -29,6 +29,7 @@ Implemented now:
 * configurable strict congestion policy via `Config.drop_on_reject`
 * phase 4 deterministic chaos extensions (satellite failure + network partition + bandwidth fluctuation)
 * phase 4 metrics (`throughput`, `link_utilization`, `satellite_buffer_usage`, `packet_drop_rate`)
+* phase 5 routing strategy plugin layer (registry-based policies with graph-aware shortest-path/contact-graph handlers)
 
 Quick start:
 

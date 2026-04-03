@@ -13,6 +13,7 @@ class SatelliteAgent(BaseAgent):
         transfer_scheduler: Callable[[str, str, str], None],
         message_factory: Callable[[str, str, str, dict], Message],
         reject_handler: Callable[[str, str, str], bool],
+        routing_context_provider: Callable[[str], dict],
     ) -> None:
         super().__init__(state.satellite_id)
         self.state = state
@@ -20,6 +21,7 @@ class SatelliteAgent(BaseAgent):
         self.transfer_scheduler = transfer_scheduler
         self.message_factory = message_factory
         self.reject_handler = reject_handler
+        self.routing_context_provider = routing_context_provider
         self.pending_outgoing: Dict[str, str] = {}
 
     def set_neighbors(self, neighbors: List[str]) -> None:
@@ -79,7 +81,11 @@ class SatelliteAgent(BaseAgent):
             if packet is None:
                 continue
             next_hop = compute_next_hop(
-                self.state.routing_policy, packet, self.id, self.state.neighbors
+                self.state.routing_policy,
+                packet,
+                self.id,
+                self.state.neighbors,
+                context=self.routing_context_provider(self.id),
             )
             if next_hop is None or packet_id in self.pending_outgoing:
                 continue
