@@ -11,7 +11,9 @@ from backend.engine import SimulationEngine, SimulationRunner
 app = FastAPI(title="MASR", version="0.1.0")
 engine = SimulationEngine(Config())
 engine_lock = threading.RLock()
-runner = SimulationRunner(engine=engine, tick_interval=engine.config.tick_interval, lock=engine_lock)
+runner = SimulationRunner(
+    engine=engine, tick_interval=engine.config.tick_interval, lock=engine_lock
+)
 
 
 @app.get("/")
@@ -28,7 +30,7 @@ def get_state() -> dict:
 @app.get("/metrics")
 def get_metrics() -> dict:
     with engine_lock:
-        return engine.metrics.snapshot()
+        return engine.metrics.snapshot(current_tick=engine.tick)
 
 
 @app.post("/spawn_packet")
@@ -38,13 +40,16 @@ def spawn_packet(request: SpawnPacketRequest) -> dict:
             raise HTTPException(
                 status_code=400, detail="source must be an existing satellite id"
             )
-        packet = engine.spawn_packet(
-            source=request.source,
-            destination=request.destination,
-            priority=request.priority,
-            size=request.size,
-            ttl=request.ttl,
-        )
+        try:
+            packet = engine.spawn_packet(
+                source=request.source,
+                destination=request.destination,
+                priority=request.priority,
+                size=request.size,
+                ttl=request.ttl,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
         return {"packet_id": packet.packet_id, "state": packet.state}
 
 
@@ -99,6 +104,33 @@ def chaos(request: ChaosRequest) -> dict:
                 )
             return {"status": "ok", "mode": request.mode}
 
+        if request.mode in {"bandwidth_fluctuation", "fluctuate_bandwidth"}:
+            engine.fluctuate_bandwidth()
+            return {"status": "ok", "mode": request.mode}
+
+        if request.mode in {"random_satellite_failure", "disable_random_satellites"}:
+            disabled = engine.disable_random_satellites(request.count)
+            return {
+                "status": "ok",
+                "mode": request.mode,
+                "disabled": disabled,
+                "failed_count": len(engine.failed_satellites),
+            }
+
+        if request.mode == "restore_satellites":
+            restored = engine.restore_satellites(request.count)
+            return {
+                "status": "ok",
+                "mode": request.mode,
+                "restored": restored,
+                "failed_count": len(engine.failed_satellites),
+            }
+
+        if request.mode == "network_partition":
+            enabled = request.enabled if request.enabled is not None else True
+            engine.set_network_partition(enabled)
+            return {"status": "ok", "mode": request.mode, "enabled": enabled}
+
     raise HTTPException(status_code=400, detail="unsupported chaos mode")
 
 
@@ -123,7 +155,11 @@ def stop_runner() -> dict:
 def runner_status() -> dict:
     with engine_lock:
         tick = engine.tick
-    return {"running": runner.is_running, "tick_interval": runner.tick_interval, "tick": tick}
+    return {
+        "running": runner.is_running,
+        "tick_interval": runner.tick_interval,
+        "tick": tick,
+    }
 
 
 @app.websocket("/ws")
@@ -138,7 +174,9 @@ async def stream_state(websocket: WebSocket) -> None:
         while True:
             if auto_stream:
                 try:
-                    command = await asyncio.wait_for(websocket.receive_text(), timeout=stream_interval)
+                    command = await asyncio.wait_for(
+                        websocket.receive_text(), timeout=stream_interval
+                    )
                     normalized = command.strip().lower()
                     if normalized == "tick":
                         with engine_lock:
@@ -179,7 +217,10 @@ async def stream_state(websocket: WebSocket) -> None:
 
             with engine_lock:
                 snapshot = engine.snapshot()
-            snapshot["runner"] = {"running": runner.is_running, "tick_interval": runner.tick_interval}
+            snapshot["runner"] = {
+                "running": runner.is_running,
+                "tick_interval": runner.tick_interval,
+            }
             await websocket.send_json(snapshot)
     except WebSocketDisconnect:
         return

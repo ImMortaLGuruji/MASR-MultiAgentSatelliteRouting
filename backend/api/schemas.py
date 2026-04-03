@@ -16,3 +16,4 @@ class SetRoutingRequest(BaseModel):
 class ChaosRequest(BaseModel):
     mode: str = "mass_packet_generation"
     count: int = Field(default=10, ge=1)
+    enabled: bool | None = None

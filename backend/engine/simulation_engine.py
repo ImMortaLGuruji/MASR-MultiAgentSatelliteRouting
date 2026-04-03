@@ -28,6 +28,8 @@ class SimulationEngine:
         self.active_links: Dict[Tuple[str, str], LinkState] = {}
         self.previous_link_keys: Set[Tuple[str, str]] = set()
         self.scheduled_transfers: List[Transfer] = []
+        self.failed_satellites: Set[str] = set()
+        self.network_partition_enabled: bool = False
 
         self._message_counter = 0
         self._packet_counter = 0
@@ -94,6 +96,9 @@ class SimulationEngine:
         size: int = 1,
         ttl: int | None = None,
     ) -> PacketState:
+        if source in self.failed_satellites:
+            raise ValueError(f"source satellite '{source}' is currently failed")
+
         packet_id = self.next_packet_id()
         packet = PacketState(
             packet_id=packet_id,
@@ -128,6 +133,8 @@ class SimulationEngine:
         self.active_links.clear()
         self.previous_link_keys.clear()
         self.scheduled_transfers.clear()
+        self.failed_satellites.clear()
+        self.network_partition_enabled = False
         self._message_counter = 0
         self._packet_counter = 0
         self.agents.clear()
@@ -143,7 +150,53 @@ class SimulationEngine:
         self.process_agents()
         self.process_transfers()
         self.expire_packets()
+        self.update_runtime_metrics()
         self.tick += 1
+
+    def set_network_partition(self, enabled: bool) -> None:
+        self.network_partition_enabled = enabled
+
+    def disable_random_satellites(self, count: int) -> List[str]:
+        available = sorted(
+            satellite_id
+            for satellite_id in self.satellites.keys()
+            if satellite_id not in self.failed_satellites
+        )
+        if not available:
+            return []
+        n = min(max(count, 0), len(available))
+        chosen = sorted(self.random.sample(available, n))
+        self.failed_satellites.update(chosen)
+        for satellite_id in chosen:
+            sat = self.satellites[satellite_id]
+            for packet_id in list(sat.state.packet_queue):
+                packet = self.packets.get(packet_id)
+                if packet is not None and packet.state not in {
+                    "DELIVERED",
+                    "DROPPED",
+                    "EXPIRED",
+                }:
+                    packet.state = "DROPPED"
+                    self.metrics.record_drop()
+            sat.state.packet_queue.clear()
+            sat.state.neighbors = []
+        return chosen
+
+    def restore_satellites(self, count: int) -> List[str]:
+        failed = sorted(self.failed_satellites)
+        if not failed:
+            return []
+        n = min(max(count, 0), len(failed))
+        restored = failed[:n]
+        for satellite_id in restored:
+            self.failed_satellites.remove(satellite_id)
+        return restored
+
+    def fluctuate_bandwidth(self) -> None:
+        for key in sorted(self.active_links.keys()):
+            link = self.active_links[key]
+            multiplier = self.random.uniform(0.5, 1.5)
+            link.bandwidth = max(1.0, link.bandwidth * multiplier)
 
     def _deliver(self, message: Message) -> None:
         receiver = self.agents.get(message.receiver)
@@ -167,9 +220,23 @@ class SimulationEngine:
     def compute_link_visibility(self) -> None:
         new_links: Dict[Tuple[str, str], LinkState] = {}
         ids = sorted(self.satellites.keys())
+        partition_left: Set[str] = set()
+        if self.network_partition_enabled:
+            midpoint = len(ids) // 2
+            partition_left = set(ids[:midpoint])
+
         for i, source_id in enumerate(ids):
+            if source_id in self.failed_satellites:
+                continue
             source = self.satellites[source_id]
             for target_id in ids[i + 1 :]:
+                if target_id in self.failed_satellites:
+                    continue
+                if self.network_partition_enabled:
+                    source_left = source_id in partition_left
+                    target_left = target_id in partition_left
+                    if source_left != target_left:
+                        continue
                 target = self.satellites[target_id]
                 d = distance(source.state.position, target.state.position)
                 if d <= self.config.max_link_distance:
@@ -189,7 +256,10 @@ class SimulationEngine:
             neighbors[source_id].append(target_id)
             neighbors[target_id].append(source_id)
         for satellite_id in ids:
-            self.satellites[satellite_id].set_neighbors(neighbors[satellite_id])
+            if satellite_id in self.failed_satellites:
+                self.satellites[satellite_id].set_neighbors([])
+            else:
+                self.satellites[satellite_id].set_neighbors(neighbors[satellite_id])
 
     def generate_link_events(self) -> None:
         current_link_keys = set(self.active_links.keys())
@@ -224,6 +294,8 @@ class SimulationEngine:
 
     def process_agents(self) -> None:
         for agent_id in sorted(self.agents.keys()):
+            if agent_id in self.failed_satellites:
+                continue
             agent = self.agents[agent_id]
             agent.process_tick(self.tick, self.message_bus.send)
 
@@ -264,6 +336,8 @@ class SimulationEngine:
 
             if packet is None or source_agent is None:
                 continue
+            if transfer.source in self.failed_satellites:
+                continue
             if packet.current_holder != transfer.source:
                 continue
             if transfer.packet_id not in source_agent.state.packet_queue:
@@ -271,6 +345,15 @@ class SimulationEngine:
 
             target_sat = self.satellites.get(transfer.target)
             if target_sat is not None:
+                if transfer.target in self.failed_satellites:
+                    packet.state = "DROPPED"
+                    self.metrics.record_drop()
+                    source_agent.state.packet_queue = [
+                        existing
+                        for existing in source_agent.state.packet_queue
+                        if existing != transfer.packet_id
+                    ]
+                    continue
                 if (
                     len(target_sat.state.packet_queue)
                     >= target_sat.state.buffer_capacity
@@ -336,6 +419,25 @@ class SimulationEngine:
                     ]
                 self.metrics.record_drop()
 
+    def update_runtime_metrics(self) -> None:
+        active_satellites = [
+            satellite_id
+            for satellite_id in sorted(self.satellites.keys())
+            if satellite_id not in self.failed_satellites
+        ]
+        active_links = len(self.active_links)
+        n = len(active_satellites)
+        possible_links = (n * (n - 1)) // 2
+        self.metrics.record_link_utilization(active_links, possible_links)
+
+        queued_packets = 0
+        total_capacity = 0
+        for satellite_id in active_satellites:
+            state = self.satellites[satellite_id].state
+            queued_packets += len(state.packet_queue)
+            total_capacity += state.buffer_capacity
+        self.metrics.record_buffer_usage(queued_packets, total_capacity)
+
     def snapshot(self) -> dict:
         satellites = {}
         for satellite_id in sorted(self.satellites.keys()):
@@ -364,5 +466,7 @@ class SimulationEngine:
             "satellites": satellites,
             "links": links,
             "packets": packets,
-            "metrics": self.metrics.snapshot(),
+            "metrics": self.metrics.snapshot(current_tick=self.tick),
+            "failed_satellites": sorted(self.failed_satellites),
+            "network_partition_enabled": self.network_partition_enabled,
         }

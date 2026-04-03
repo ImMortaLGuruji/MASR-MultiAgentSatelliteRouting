@@ -15,7 +15,7 @@ Unlike traditional network simulators, MASR enforces:
 
 MASR is designed as a **research-grade coordination framework** rather than a simple visualization or toy simulation.
 
-## Current Implementation Status (Phase 3)
+## Current Implementation Status (Phase 4)
 
 Implemented now:
 
@@ -27,6 +27,8 @@ Implemented now:
 * minimal frontend websocket snapshot viewer in `frontend/`
 * phase 3 deterministic background runner + websocket auto-stream controls
 * configurable strict congestion policy via `Config.drop_on_reject`
+* phase 4 deterministic chaos extensions (satellite failure + network partition + bandwidth fluctuation)
+* phase 4 metrics (`throughput`, `link_utilization`, `satellite_buffer_usage`, `packet_drop_rate`)
 
 Quick start:
 
@@ -60,6 +62,22 @@ Phase 3 API controls:
 POST /runner/start
 POST /runner/stop
 GET  /runner/status
+```
+
+Phase 4 chaos modes for `POST /chaos`:
+
+```text
+mass_packet_generation
+random_satellite_failure
+restore_satellites
+bandwidth_fluctuation
+network_partition
+```
+
+`network_partition` accepts optional JSON field:
+
+```json
+{"mode":"network_partition","enabled":true}
 ```
 
 Phase 3 websocket commands:
