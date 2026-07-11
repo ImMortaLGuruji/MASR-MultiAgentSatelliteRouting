@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from typing import List, Callable, Any
 from backend.models import Message
 
+
 class BaseAgent(ABC):
     def __init__(self, agent_id: str):
         self.id = agent_id
@@ -17,7 +18,9 @@ class BaseAgent(ABC):
         self.inbox.clear()
 
     @abstractmethod
-    def handle_message(self, message: Message, sender: Callable[[Message], None], tick: int) -> None:
+    def handle_message(
+        self, message: Message, sender: Callable[[Message], None], tick: int
+    ) -> None:
         pass
 
     @abstractmethod

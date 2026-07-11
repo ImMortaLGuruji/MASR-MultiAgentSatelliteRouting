@@ -15,30 +15,33 @@ class SimulationRunner:
         self.lock = lock
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
+        self._lifecycle_lock = threading.Lock()
 
     @property
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
 
     def start(self) -> bool:
-        if self.is_running:
-            return False
-        self._stop_event.clear()
-        self._thread = threading.Thread(
-            target=self._loop, name="masr-sim-runner", daemon=True
-        )
-        self._thread.start()
-        return True
+        with self._lifecycle_lock:
+            if self.is_running:
+                return False
+            self._stop_event.clear()
+            self._thread = threading.Thread(
+                target=self._loop, name="masr-sim-runner", daemon=True
+            )
+            self._thread.start()
+            return True
 
     def stop(self) -> bool:
-        if not self.is_running:
-            return False
-        self._stop_event.set()
-        thread = self._thread
-        if thread is not None:
-            thread.join(timeout=max(self.tick_interval * 2.0, 0.1))
-        self._thread = None
-        return True
+        with self._lifecycle_lock:
+            if not self.is_running:
+                return False
+            self._stop_event.set()
+            thread = self._thread
+            if thread is not None:
+                thread.join(timeout=max(self.tick_interval * 2.0, 0.1))
+            self._thread = None
+            return True
 
     def _loop(self) -> None:
         next_tick_at = time.monotonic()

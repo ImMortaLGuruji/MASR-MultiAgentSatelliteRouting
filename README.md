@@ -153,7 +153,7 @@ MASR tracks:
 ### Backend
 
 ```bash
-uvicorn backend.api.main:app --reload
+uvicorn backend.api.app:app --reload
 ```
 
 ---
@@ -163,6 +163,23 @@ uvicorn backend.api.main:app --reload
 ```bash
 npm install
 npm run dev
+```
+
+---
+
+## 🐳 Docker
+
+Run the backend container:
+
+```bash
+docker build -t masr-backend .
+docker run -p 8000:8000 masr-backend
+```
+
+Run full stack with Docker Compose:
+
+```bash
+docker compose up --build
 ```
 
 ---
@@ -177,6 +194,27 @@ Simulation parameters can be adjusted:
 * Buffer sizes
 * Routing policy
 * Tick interval
+
+Backend configuration can be overridden via environment variables:
+
+* `MASR_SATELLITES_PER_ORBIT`, `MASR_NUM_ORBITS`, `MASR_ORBITAL_ALTITUDE_KM`
+* `MASR_MAX_LINK_DISTANCE_KM`, `MASR_BUFFER_CAPACITY`, `MASR_BANDWIDTH`
+* `MASR_TICK_INTERVAL`, `MASR_SEED`, `MASR_ROUTING_POLICY`
+* `MASR_PACKET_TTL`, `MASR_PACKET_RETENTION_TICKS`
+* `MASR_GS_LAT_DEG`, `MASR_GS_LON_DEG`
+* `MASR_CONTACT_PREDICTION_HORIZON_TICKS`
+
+Optional API protection and limits:
+
+* `MASR_API_KEY` (require `X-API-Key` header)
+* `MASR_RATE_LIMIT_PER_MIN` (per-IP rate limit)
+* `MASR_MAX_REQUEST_BYTES` (request size cap)
+
+Frontend API targets can be configured with Vite env vars:
+
+* `VITE_API_URL` (default: `http://localhost:8000`)
+* `VITE_WS_URL` (default: `ws://localhost:8000`)
+* `VITE_API_KEY` (optional API key for HTTP + WS)
 
 ---
 

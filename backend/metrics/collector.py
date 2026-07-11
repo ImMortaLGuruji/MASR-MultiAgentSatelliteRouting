@@ -3,7 +3,6 @@ from typing import Dict, Union
 
 from backend.models import PacketState
 
-
 MetricValue = Union[int, float]
 
 

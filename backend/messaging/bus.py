@@ -2,6 +2,7 @@ from typing import Any, Callable, List
 
 from backend.models import Message
 
+
 class MessageBus:
     def __init__(self) -> None:
         self.current_queue: List[Message | dict[str, Any]] = []

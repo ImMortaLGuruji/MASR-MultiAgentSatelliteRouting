@@ -1,10 +1,13 @@
 import asyncio
+import os
 import threading
+import time
 from dataclasses import asdict, replace
 from collections import deque
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from backend.api.schemas import (
     ChaosRequest,
@@ -15,13 +18,30 @@ from backend.api.schemas import (
 from backend.config import Config
 from backend.engine import SimulationEngine, SimulationRunner
 
-
 app = FastAPI(title="MASR", version="0.1.0")
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+API_KEY = os.getenv("MASR_API_KEY")
+MAX_REQUEST_BYTES = _env_int("MASR_MAX_REQUEST_BYTES", 100_000)
+RATE_LIMIT_PER_MIN = _env_int("MASR_RATE_LIMIT_PER_MIN", 300)
+RATE_LIMIT_WINDOW_SEC = 60.0
+UNAUTHENTICATED_PATHS = {"/", "/v1", "/docs", "/openapi.json", "/redoc"}
+_rate_limit_buckets: dict[str, deque[float]] = {}
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -31,6 +51,40 @@ engine_lock = threading.RLock()
 runner = SimulationRunner(
     engine=engine, tick_interval=engine.config.tick_interval, lock=engine_lock
 )
+async_engine_lock = asyncio.Lock()
+
+
+@app.middleware("http")
+async def enforce_limits(request: Request, call_next):
+    if API_KEY and request.url.path not in UNAUTHENTICATED_PATHS:
+        if request.headers.get("x-api-key") != API_KEY:
+            return JSONResponse(status_code=401, content={"detail": "unauthorized"})
+
+    if MAX_REQUEST_BYTES > 0:
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                if int(content_length) > MAX_REQUEST_BYTES:
+                    return JSONResponse(
+                        status_code=413,
+                        content={"detail": "request too large"},
+                    )
+            except ValueError:
+                pass
+
+    if RATE_LIMIT_PER_MIN > 0:
+        client_host = request.client.host if request.client else "unknown"
+        bucket = _rate_limit_buckets.setdefault(client_host, deque())
+        now = time.monotonic()
+        while bucket and now - bucket[0] > RATE_LIMIT_WINDOW_SEC:
+            bucket.popleft()
+        if len(bucket) >= RATE_LIMIT_PER_MIN:
+            return JSONResponse(
+                status_code=429, content={"detail": "rate limit exceeded"}
+            )
+        bucket.append(now)
+
+    return await call_next(request)
 
 
 def _runtime_config() -> dict:
@@ -50,10 +104,15 @@ def _state_payload() -> dict:
 
 
 def _build_adjacency_from_links() -> dict[str, set[str]]:
-    adjacency: dict[str, set[str]] = {
-        satellite_id: set() for satellite_id in sorted(engine.satellites.keys())
-    }
+    node_ids = sorted(
+        set(engine.satellites.keys()) | set(engine.ground_stations.keys())
+    )
+    adjacency: dict[str, set[str]] = {node_id: set() for node_id in node_ids}
     for source_id, target_id in sorted(engine.active_links.keys()):
+        if source_id not in adjacency:
+            adjacency[source_id] = set()
+        if target_id not in adjacency:
+            adjacency[target_id] = set()
         adjacency[source_id].add(target_id)
         adjacency[target_id].add(source_id)
     return adjacency
@@ -112,32 +171,36 @@ def _diff_payload(previous: dict | None, current: dict) -> dict:
 
 
 @app.get("/")
+@app.get("/v1")
 def root() -> dict:
     return {"service": "MASR", "status": "ok"}
 
 
 @app.get("/state")
+@app.get("/v1/state")
 def get_state() -> dict:
     with engine_lock:
         return _state_payload()
 
 
 @app.get("/config")
+@app.get("/v1/config")
 def get_config() -> dict:
     with engine_lock:
         return _runtime_config()
 
 
 @app.post("/config")
+@app.post("/v1/config")
 def update_config(request: ConfigUpdateRequest) -> dict:
     with engine_lock:
         updated = engine.config
 
         if request.routing_policy is not None:
-            updated = replace(updated, routing_policy=request.routing_policy)
+            updated = replace(updated, routing_policy=request.routing_policy.value)
             for satellite_id in sorted(engine.satellites.keys()):
                 engine.satellites[satellite_id].state.routing_policy = (
-                    request.routing_policy
+                    request.routing_policy.value
                 )
 
         if request.drop_on_reject is not None:
@@ -152,17 +215,27 @@ def update_config(request: ConfigUpdateRequest) -> dict:
 
 
 @app.get("/metrics")
+@app.get("/v1/metrics")
 def get_metrics() -> dict:
     with engine_lock:
         return engine.metrics.snapshot(current_tick=engine.tick)
 
 
 @app.post("/spawn_packet")
+@app.post("/v1/spawn_packet")
 def spawn_packet(request: SpawnPacketRequest) -> dict:
     with engine_lock:
         if request.source not in engine.satellites:
             raise HTTPException(
                 status_code=400, detail="source must be an existing satellite id"
+            )
+        valid_destinations = set(engine.satellites.keys()) | set(
+            engine.ground_stations.keys()
+        )
+        if request.destination not in valid_destinations:
+            raise HTTPException(
+                status_code=400,
+                detail="destination must be an existing satellite or ground station id",
             )
         try:
             packet = engine.spawn_packet(
@@ -178,6 +251,7 @@ def spawn_packet(request: SpawnPacketRequest) -> dict:
 
 
 @app.post("/tick")
+@app.post("/v1/tick")
 def run_tick() -> dict:
     with engine_lock:
         engine.run_tick()
@@ -185,6 +259,7 @@ def run_tick() -> dict:
 
 
 @app.post("/reset")
+@app.post("/v1/reset")
 def reset() -> dict:
     with engine_lock:
         engine.reset()
@@ -192,15 +267,17 @@ def reset() -> dict:
 
 
 @app.post("/set_routing")
+@app.post("/v1/set_routing")
 def set_routing(request: SetRoutingRequest) -> dict:
     with engine_lock:
-        engine.config = replace(engine.config, routing_policy=request.policy)
+        engine.config = replace(engine.config, routing_policy=request.policy.value)
         for satellite_id in sorted(engine.satellites.keys()):
-            engine.satellites[satellite_id].state.routing_policy = request.policy
-    return {"status": "ok", "policy": request.policy}
+            engine.satellites[satellite_id].state.routing_policy = request.policy.value
+    return {"status": "ok", "policy": request.policy.value}
 
 
 @app.post("/chaos")
+@app.post("/v1/chaos")
 def chaos(request: ChaosRequest) -> dict:
     with engine_lock:
         ids = sorted(engine.satellites.keys())
@@ -264,6 +341,7 @@ def chaos(request: ChaosRequest) -> dict:
 
 
 @app.post("/runner/start")
+@app.post("/v1/runner/start")
 def start_runner() -> dict:
     started = runner.start()
     return {
@@ -275,12 +353,14 @@ def start_runner() -> dict:
 
 
 @app.post("/runner/stop")
+@app.post("/v1/runner/stop")
 def stop_runner() -> dict:
     stopped = runner.stop()
     return {"status": "ok", "running": runner.is_running, "stopped": stopped}
 
 
 @app.get("/runner/status")
+@app.get("/v1/runner/status")
 def runner_status() -> dict:
     with engine_lock:
         tick = engine.tick
@@ -292,14 +372,41 @@ def runner_status() -> dict:
 
 
 @app.websocket("/ws")
+@app.websocket("/v1/ws")
 async def stream_state(websocket: WebSocket) -> None:
     await websocket.accept()
+    if API_KEY:
+        provided_key = websocket.headers.get("x-api-key") or websocket.query_params.get(
+            "api_key"
+        )
+        if provided_key != API_KEY:
+            await websocket.close(code=1008)
+            return
     auto_stream = True
     stream_interval = max(engine.config.tick_interval, 0.1)
     previous_snapshot: dict | None = None
+
+    async def snapshot_with_lock() -> dict:
+        def _build() -> dict:
+            with engine_lock:
+                return _state_payload()
+
+        async with async_engine_lock:
+            return await asyncio.to_thread(_build)
+
+    async def run_engine_command(fn) -> None:
+        def _run() -> None:
+            with engine_lock:
+                fn()
+
+        async with async_engine_lock:
+            await asyncio.to_thread(_run)
+
+    async def run_runner_command(fn) -> None:
+        await asyncio.to_thread(fn)
+
     try:
-        with engine_lock:
-            initial_snapshot = _state_payload()
+        initial_snapshot = await snapshot_with_lock()
         await websocket.send_json(_diff_payload(previous_snapshot, initial_snapshot))
         previous_snapshot = initial_snapshot
         while True:
@@ -310,15 +417,14 @@ async def stream_state(websocket: WebSocket) -> None:
                     )
                     normalized = command.strip().lower()
                     if normalized == "tick":
-                        with engine_lock:
-                            engine.run_tick()
+                        await run_engine_command(engine.run_tick)
                     elif normalized == "reset":
-                        with engine_lock:
-                            engine.reset()
+                        await run_engine_command(engine.reset)
+                        previous_snapshot = None
                     elif normalized == "runner:start":
-                        runner.start()
+                        await run_runner_command(runner.start)
                     elif normalized == "runner:stop":
-                        runner.stop()
+                        await run_runner_command(runner.stop)
                     elif normalized == "stream:off":
                         auto_stream = False
                     elif normalized.startswith("stream:interval:"):
@@ -334,20 +440,18 @@ async def stream_state(websocket: WebSocket) -> None:
                 command = await websocket.receive_text()
                 normalized = command.strip().lower()
                 if normalized == "tick":
-                    with engine_lock:
-                        engine.run_tick()
+                    await run_engine_command(engine.run_tick)
                 elif normalized == "reset":
-                    with engine_lock:
-                        engine.reset()
+                    await run_engine_command(engine.reset)
+                    previous_snapshot = None
                 elif normalized == "runner:start":
-                    runner.start()
+                    await run_runner_command(runner.start)
                 elif normalized == "runner:stop":
-                    runner.stop()
+                    await run_runner_command(runner.stop)
                 elif normalized == "stream:on":
                     auto_stream = True
 
-            with engine_lock:
-                snapshot = _state_payload()
+            snapshot = await snapshot_with_lock()
             await websocket.send_json(_diff_payload(previous_snapshot, snapshot))
             previous_snapshot = snapshot
     except WebSocketDisconnect:

@@ -90,7 +90,7 @@ def epidemic_strategy(
     for neighbor in ordered:
         if neighbor not in packet.route_history:
             return neighbor
-    return ordered[0]
+    return None
 
 
 def store_and_forward_strategy(
@@ -99,6 +99,23 @@ def store_and_forward_strategy(
     neighbors: Iterable[str],
     context: RoutingContext,
 ) -> Optional[str]:
+    """
+    Delay-Tolerant Networking store-and-forward routing.
+
+    Key behavioural difference from shortest_path:
+      - If we have adjacency context and a BFS path exists → forward along it.
+      - If we have adjacency context but NO path to destination → HOLD the packet
+        (return None).  Do NOT fall back to epidemic forwarding.  The packet waits
+        until orbital motion opens a new contact window.
+      - If NO adjacency context is available (context empty / early ticks) →
+        best-effort forward to first unvisited neighbour so packets still make
+        progress.
+
+    Returning None when the topology is known but the destination is unreachable
+    is the critical distinction: shortest_path also returns None in that case, but
+    the intent here is explicit DTN store-and-forward semantics, and the router
+    will not speculatively bounce the packet to a random neighbour.
+    """
     ordered = _ordered_neighbors(neighbors)
     if not ordered:
         return None
@@ -108,11 +125,17 @@ def store_and_forward_strategy(
 
     adjacency = _adjacency_from_context(context)
     if adjacency:
+        # Topology is known — only forward if a real path exists.
         next_hop = _bfs_next_hop(current_id, packet.destination, adjacency)
         if next_hop is not None and next_hop in ordered:
             return next_hop
+        # No path today: store and wait for a future contact window.
         return None
 
+    # No adjacency context: use best-effort forwarding to an unvisited neighbour.
+    for neighbor in ordered:
+        if neighbor not in packet.route_history:
+            return neighbor
     return None
 
 

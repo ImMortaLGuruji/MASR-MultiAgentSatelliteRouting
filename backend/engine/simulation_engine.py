@@ -7,11 +7,23 @@ from typing import Dict, List, Set, Tuple
 
 from backend.agents import GroundStationAgent, SatelliteAgent
 from backend.config import Config
-from backend.engine.scheduler import EventScheduler
 from backend.messaging import MessageBus
 from backend.metrics import MetricsCollector
-from backend.models import LinkState, Message, PacketState, SatelliteState, Transfer
-from backend.orbital import check_eclipse, compute_position, distance
+from backend.models import (
+    LinkState,
+    Message,
+    PacketState,
+    SatelliteState,
+    Transfer,
+    Vector3,
+)
+from backend.orbital import (
+    check_eclipse,
+    compute_position,
+    distance,
+    ground_station_position,
+    ground_station_visible,
+)
 
 
 class SimulationEngine:
@@ -19,7 +31,6 @@ class SimulationEngine:
         self.tick = 0
         self.config = config
         self.message_bus = MessageBus()
-        self.scheduler = EventScheduler()
         self.metrics = MetricsCollector()
         self.random = random.Random(config.seed)
 
@@ -27,6 +38,7 @@ class SimulationEngine:
         self.satellites: Dict[str, SatelliteAgent] = {}
         self.ground_stations: Dict[str, GroundStationAgent] = {}
         self.packets: Dict[str, PacketState] = {}
+        self.packet_owners: Dict[str, str] = {}
 
         self.active_links: Dict[Tuple[str, str], LinkState] = {}
         self.link_cache: Dict[Tuple[str, str], List[Tuple[int, int]]] = {}
@@ -34,6 +46,9 @@ class SimulationEngine:
         self.scheduled_transfers: List[Transfer] = []
         self.failed_satellites: Set[str] = set()
         self.network_partition_enabled: bool = False
+
+        self._predicted_adjacency_cache: Dict[str, Set[str]] | None = None
+        self._predicted_adjacency_tick: int = -1
 
         self._message_counter = 0
         self._packet_counter = 0
@@ -53,6 +68,7 @@ class SimulationEngine:
                         total_slots=self.config.satellites_per_orbit,
                         altitude_km=self.config.orbital_altitude,
                         tick=self.tick,
+                        total_orbits=self.config.num_orbits,
                     ),
                     buffer_capacity=self.config.buffer_capacity,
                     bandwidth_capacity=self.config.bandwidth,
@@ -69,19 +85,24 @@ class SimulationEngine:
                 self.satellites[satellite_id] = agent
                 self.agents[satellite_id] = agent
 
-            station = GroundStationAgent("gs-0")
-            self.ground_stations[station.id] = station
-            self.agents[station.id] = station
+        station_position = ground_station_position(
+            self.config.ground_station_lat_deg, self.config.ground_station_lon_deg
+        )
+        # Pass create_message so the GS can generate PACKET_ACCEPT replies using
+        # the same engine-scoped message IDs as satellite agents.
+        station = GroundStationAgent("gs-0", station_position, self.create_message)
+        self.ground_stations[station.id] = station
+        self.agents[station.id] = station
 
     def get_routing_context(self, current_id: str) -> dict:
         adjacency: Dict[str, Set[str]] = {}
-        for satellite_id in sorted(self.satellites.keys()):
-            adjacency[satellite_id] = set()
+        for node_id in sorted(self.satellites.keys()) + sorted(self.ground_stations):
+            adjacency[node_id] = set()
         for source_id, target_id in sorted(self.active_links.keys()):
             adjacency[source_id].add(target_id)
             adjacency[target_id].add(source_id)
 
-        predicted_adjacency = {node: set(links) for node, links in adjacency.items()}
+        predicted_adjacency = self._predicted_adjacency(adjacency)
 
         return {
             "tick": self.tick,
@@ -91,6 +112,82 @@ class SimulationEngine:
             "network_partition_enabled": self.network_partition_enabled,
             "current_id": current_id,
         }
+
+    def _predicted_adjacency(
+        self, adjacency: Dict[str, Set[str]]
+    ) -> Dict[str, Set[str]]:
+        if (
+            self._predicted_adjacency_cache is not None
+            and self._predicted_adjacency_tick == self.tick
+        ):
+            return {
+                node: set(links)
+                for node, links in self._predicted_adjacency_cache.items()
+            }
+
+        predicted: Dict[str, Set[str]] = {
+            node: set(links) for node, links in adjacency.items()
+        }
+        horizon = max(self.config.contact_prediction_horizon_ticks, 0)
+        if horizon <= 0:
+            self._predicted_adjacency_cache = predicted
+            self._predicted_adjacency_tick = self.tick
+            return {node: set(links) for node, links in predicted.items()}
+
+        ids = sorted(self.satellites.keys())
+        partition_left: Set[str] = set()
+        if self.network_partition_enabled:
+            midpoint = len(ids) // 2
+            partition_left = set(ids[:midpoint])
+
+        for offset in range(1, horizon + 1):
+            positions: Dict[str, Vector3] = {}
+            future_tick = self.tick + offset
+            for satellite_id in ids:
+                if satellite_id in self.failed_satellites:
+                    continue
+                _, orbit_s, slot_s = satellite_id.split("-")
+                orbit_index = int(orbit_s)
+                slot_index = int(slot_s)
+                positions[satellite_id] = compute_position(
+                    orbit_index=orbit_index,
+                    slot_index=slot_index,
+                    total_slots=self.config.satellites_per_orbit,
+                    altitude_km=self.config.orbital_altitude,
+                    tick=future_tick,
+                    total_orbits=self.config.num_orbits,
+                )
+
+            for idx, source_id in enumerate(ids):
+                source_pos = positions.get(source_id)
+                if source_pos is None:
+                    continue
+                for target_id in ids[idx + 1 :]:
+                    target_pos = positions.get(target_id)
+                    if target_pos is None:
+                        continue
+                    if self.network_partition_enabled:
+                        if (source_id in partition_left) != (
+                            target_id in partition_left
+                        ):
+                            continue
+                    d = distance(source_pos, target_pos)
+                    if d <= self.config.max_link_distance:
+                        predicted[source_id].add(target_id)
+                        predicted[target_id].add(source_id)
+
+            for station in self.ground_stations.values():
+                for satellite_id, sat_pos in positions.items():
+                    if not ground_station_visible(station.position, sat_pos):
+                        continue
+                    d = distance(station.position, sat_pos)
+                    if d <= self.config.max_link_distance:
+                        predicted[station.id].add(satellite_id)
+                        predicted[satellite_id].add(station.id)
+
+        self._predicted_adjacency_cache = predicted
+        self._predicted_adjacency_tick = self.tick
+        return {node: set(links) for node, links in predicted.items()}
 
     def _drop_packet_from_holder(self, packet_id: str, holder_id: str) -> None:
         holder_sat = self.satellites.get(holder_id)
@@ -108,6 +205,7 @@ class SimulationEngine:
         }:
             packet.state = "DROPPED"
             self.metrics.record_drop()
+        self.packet_owners.pop(packet_id, None)
 
     def _lowest_priority_packet_id(self, packet_ids: List[str]) -> str | None:
         if not packet_ids:
@@ -185,8 +283,17 @@ class SimulationEngine:
         size: int = 1,
         ttl: int | None = None,
     ) -> PacketState:
+        if source not in self.satellites:
+            raise ValueError(f"source '{source}' must be an existing satellite")
         if source in self.failed_satellites:
             raise ValueError(f"source satellite '{source}' is currently failed")
+        if (
+            destination not in self.satellites
+            and destination not in self.ground_stations
+        ):
+            raise ValueError(
+                f"destination '{destination}' must be a satellite or ground station"
+            )
 
         packet_id = self.next_packet_id()
         packet = PacketState(
@@ -202,6 +309,7 @@ class SimulationEngine:
             state="CREATED",
         )
         self.packets[packet_id] = packet
+        self.packet_owners[packet_id] = source
         self.metrics.record_created()
 
         source_agent = self.satellites.get(source)
@@ -210,6 +318,7 @@ class SimulationEngine:
             if not admitted:
                 packet.state = "DROPPED"
                 self.metrics.record_drop()
+                self.packet_owners.pop(packet_id, None)
         return packet
 
     def reset(self) -> None:
@@ -218,11 +327,14 @@ class SimulationEngine:
         self.metrics.reset()
         self.random = random.Random(self.config.seed)
         self.packets.clear()
+        self.packet_owners.clear()
         self.active_links.clear()
         self.previous_link_keys.clear()
         self.scheduled_transfers.clear()
         self.failed_satellites.clear()
         self.network_partition_enabled = False
+        self._predicted_adjacency_cache = None
+        self._predicted_adjacency_tick = -1
         self._message_counter = 0
         self._packet_counter = 0
         self.agents.clear()
@@ -270,6 +382,7 @@ class SimulationEngine:
                 }:
                     packet.state = "DROPPED"
                     self.metrics.record_drop()
+                    self.packet_owners.pop(packet_id, None)
             sat.state.packet_queue.clear()
             sat.state.neighbors = []
         return chosen
@@ -307,6 +420,7 @@ class SimulationEngine:
                 total_slots=self.config.satellites_per_orbit,
                 altitude_km=self.config.orbital_altitude,
                 tick=self.tick,
+                total_orbits=self.config.num_orbits,
             )
 
             # Energy/Eclipse model update
@@ -421,15 +535,42 @@ class SimulationEngine:
                                 target=pair[1],
                                 bandwidth=self.config.bandwidth,
                                 delay=self.config.propagation_delay,
-                                quality=max(0.0, 1.0 - (d / self.config.max_link_distance)),
+                                quality=max(
+                                    0.0, 1.0 - (d / self.config.max_link_distance)
+                                ),
                                 active=True,
                             )
+        for station in sorted(self.ground_stations.values(), key=lambda gs: gs.id):
+            station.visible_satellites = []
+            for satellite_id in ids:
+                if satellite_id in self.failed_satellites:
+                    continue
+                sat = self.satellites[satellite_id]
+                if sat.state.current_battery <= 0.0:
+                    continue
+                if not ground_station_visible(station.position, sat.state.position):
+                    continue
+                d = distance(station.position, sat.state.position)
+                if d <= self.config.max_link_distance:
+                    pair = tuple(sorted((station.id, satellite_id)))
+                    new_links[pair] = LinkState(
+                        source=pair[0],
+                        target=pair[1],
+                        bandwidth=self.config.bandwidth,
+                        delay=self.config.propagation_delay,
+                        quality=max(0.0, 1.0 - (d / self.config.max_link_distance)),
+                        active=True,
+                    )
+                    station.visible_satellites.append(satellite_id)
+
         self.active_links = new_links
 
         neighbors: Dict[str, List[str]] = {satellite_id: [] for satellite_id in ids}
         for source_id, target_id in sorted(self.active_links.keys()):
-            neighbors[source_id].append(target_id)
-            neighbors[target_id].append(source_id)
+            if source_id in neighbors:
+                neighbors[source_id].append(target_id)
+            if target_id in neighbors:
+                neighbors[target_id].append(source_id)
         for satellite_id in ids:
             if satellite_id in self.failed_satellites:
                 self.satellites[satellite_id].set_neighbors([])
@@ -488,8 +629,7 @@ class SimulationEngine:
             delay = link.delay
         transfer_time_ticks = max(
             0,
-            math.ceil((packet.size / max(bandwidth, 1.0)) + max(delay, 0.0))
-            - 1,
+            math.ceil((packet.size / max(bandwidth, 1.0)) + max(delay, 0.0)) - 1,
         )
         self.scheduled_transfers.append(
             Transfer(
@@ -521,6 +661,7 @@ class SimulationEngine:
         ]
         packet.state = "DROPPED"
         self.metrics.record_drop()
+        self.packet_owners.pop(packet_id, None)
         return True
 
     def process_transfers(self) -> None:
@@ -555,8 +696,11 @@ class SimulationEngine:
                     ]
                     packet.state = "DROPPED"
                     self.metrics.record_drop()
+                    self.packet_owners.pop(packet.packet_id, None)
                     continue
-                self.transfer_packet(transfer.packet_id, transfer.source, transfer.target)
+                self.transfer_packet(
+                    transfer.packet_id, transfer.source, transfer.target
+                )
                 if packet.state in {"DROPPED", "EXPIRED"}:
                     continue
 
@@ -568,6 +712,7 @@ class SimulationEngine:
                         if existing != transfer.packet_id
                     ]
                     self.metrics.record_delivery(packet, self.tick)
+                    self.packet_owners.pop(transfer.packet_id, None)
                 continue
 
             target_station = self.ground_stations.get(transfer.target)
@@ -578,11 +723,15 @@ class SimulationEngine:
                     if existing != transfer.packet_id
                 ]
                 packet.current_holder = transfer.target
-                assert packet.current_holder in self.agents
+                if packet.current_holder not in self.agents:
+                    raise RuntimeError(
+                        f"Invariant violated: holder {packet.current_holder} missing"
+                    )
                 packet.route_history.append(transfer.target)
                 packet.state = "DELIVERED"
                 self.metrics.record_delivery(packet, self.tick)
                 target_station.received_packets.append(packet.packet_id)
+                self.packet_owners[packet.packet_id] = transfer.target
 
         self.scheduled_transfers = pending
 
@@ -593,7 +742,11 @@ class SimulationEngine:
         if packet is None or source_agent is None or target_agent is None:
             return
 
-        assert packet.current_holder == from_id
+        if packet.current_holder != from_id:
+            raise RuntimeError(
+                "Invariant violated: packet holder mismatch "
+                f"(packet={packet_id}, holder={packet.current_holder}, expected={from_id})"
+            )
 
         source_queue = source_agent.state.packet_queue
         if packet_id in source_queue:
@@ -603,17 +756,16 @@ class SimulationEngine:
         if not admitted:
             packet.state = "DROPPED"
             self.metrics.record_drop()
+            self.packet_owners.pop(packet_id, None)
             return
 
         packet.current_holder = to_id
         packet.route_history.append(to_id)
-        assert packet.current_holder in self.agents
-
-        owners = 0
-        for satellite_id in sorted(self.satellites.keys()):
-            if packet_id in self.satellites[satellite_id].state.packet_queue:
-                owners += 1
-        assert owners <= 1
+        if packet.current_holder not in self.agents:
+            raise RuntimeError(
+                f"Invariant violated: holder {packet.current_holder} missing"
+            )
+        self.packet_owners[packet_id] = to_id
 
     def expire_packets(self) -> None:
         for packet_id in sorted(self.packets.keys()):
@@ -630,6 +782,24 @@ class SimulationEngine:
                         if existing != packet_id
                     ]
                 self.metrics.record_drop()
+                self.packet_owners.pop(packet_id, None)
+
+        self.prune_terminal_packets()
+
+    def prune_terminal_packets(self) -> None:
+        retention = max(self.config.packet_retention_ticks, 0)
+        if retention <= 0:
+            return
+        cutoff = self.tick - retention
+        to_remove = [
+            packet_id
+            for packet_id, packet in self.packets.items()
+            if packet.state in {"DELIVERED", "DROPPED", "EXPIRED"}
+            and packet.creation_tick < cutoff
+        ]
+        for packet_id in to_remove:
+            self.packets.pop(packet_id, None)
+            self.packet_owners.pop(packet_id, None)
 
     def update_runtime_metrics(self) -> None:
         active_satellites = [

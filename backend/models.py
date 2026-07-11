@@ -33,7 +33,6 @@ class SatelliteState:
     buffer_capacity: int = 0
     bandwidth_capacity: float = 0.0
     packet_queue: List[PacketID] = field(default_factory=list)
-    link_table: Dict[str, LinkState] = field(default_factory=dict)
     routing_policy: str = "SHORTEST_PATH"
 
     # Energy model
